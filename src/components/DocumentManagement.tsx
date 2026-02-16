@@ -38,6 +38,7 @@ export const DocumentManagement: React.FC<DocumentManagementProps> = ({
   onFileUpload,
   onUploadSubmit,
   onClearSelection
+ 
 }) => {
   const [selectedTemplate, setSelectedTemplate] = useState<TemplateData | null>(null);
   const [selectedReport, setSelectedReport] = useState<ReportData | null>(null);
@@ -360,6 +361,7 @@ export const DocumentManagement: React.FC<DocumentManagementProps> = ({
             </div>
           </CardContent>
         </Card>
+        
       </div>
     </>
   );

@@ -52,6 +52,7 @@ interface AIConversionPreviewProps {
   uploadDate: string;
   onSave: (sections: FormSection[], updatedFileName: string, updatedDepartment: string) => void;
   onCancel: () => void;
+  serverHtml?: string | null;
 }
 
 const DEPARTMENTS = [
@@ -132,6 +133,7 @@ export const AIConversionPreview: React.FC<AIConversionPreviewProps> = ({
   uploadDate,
   onSave,
   onCancel,
+  serverHtml
 }) => {
   const [sections, setSections] = useState<FormSection[]>(initialSections);
   const [editingFieldId, setEditingFieldId] = useState<string | null>(null);
@@ -294,6 +296,22 @@ export const AIConversionPreview: React.FC<AIConversionPreviewProps> = ({
           </Button>
         </div>
       </div>
+
+      {/* Server-generated AI Review HTML (rendered as-is; backend must sanitize) */}
+      {serverHtml && (
+        <div className="mb-6">
+          <div className="bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden">
+            <div className="px-6 py-4 border-b border-slate-100">
+              <h3 className="text-sm font-bold text-slate-800 flex items-center gap-2">
+                <span className="inline-block w-3 h-3 bg-blue-500 rounded-full" />
+                AI Review
+              </h3>
+              <p className="text-xs text-slate-400 mt-1">Server-generated HTML preview — backend is responsible for sanitization.</p>
+            </div>
+            <div className="p-6 prose max-w-full text-slate-800" dangerouslySetInnerHTML={{ __html: serverHtml }} />
+          </div>
+        </div>
+      )}
 
       {/* Configuration Section - Document File Name Only */}
       <div className="max-w-md space-y-3">

@@ -64,13 +64,13 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
     { id: 'document-management', label: 'AI Conversion', icon: Sparkles, isAI: true, roles: ['admin', 'requestor', 'preparator'] },
     { id: 'raise-request', label: 'Raise Request', icon: FilePlus, roles: ['admin', 'requestor', 'preparator'] },
     { id: 'document-library', label: 'Document Library', icon: Library, roles: ['admin', 'requestor', 'preparator', 'manager', 'manager_reviewer', 'manager_approver', 'approver'] },
-    { id: 'document-effectiveness', label: 'Document Effectiveness', icon: TrendingUp, roles: ['admin', 'manager', 'preparator', 'requestor', 'reviewer', 'approver'] },
+    { id: 'document-effectiveness', label: 'Document Effectiveness', icon: TrendingUp, roles: ['admin', 'manager', 'preparator', 'requestor', 'reviewer'] },
     { id: 'activity-log', label: 'Activity Log', icon: ClipboardList, roles: ['preparator', 'requestor', 'manager', 'manager_reviewer', 'manager_approver', 'reviewer', 'approver'] },
     { id: 'reports-analytics', label: 'Reports', icon: BarChart3, roles: ['admin', 'manager', 'manager_reviewer', 'manager_approver', 'approver', 'reviewer'] },
     { id: 'audit-logs', label: 'Audit Logs', icon: ClipboardList, roles: ['admin'] },
     // Manager-specific menu items
     { id: 'training-management', label: 'Training Management', icon: GraduationCap, roles: [] },
-    { id: 'document-versioning', label: 'Document Versioning', icon: GitCompare, roles: ['manager'] },
+    { id: 'document-versioning', label: 'Document Versioning', icon: GitCompare, roles: ['admin'] },
   ];
 
   // Filter menu items based on user role

@@ -6,25 +6,20 @@ import { Checkbox } from './ui/checkbox';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from './ui/card';
 import { Separator } from './ui/separator';
 import { FileText, HelpCircle, ArrowRight, ArrowLeft, Shield, Users, CheckCircle, UserCheck, Mail, Lock, Eye, EyeOff } from 'lucide-react';
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from './ui/select';
 import { UserRole } from '../types';
+import { authService } from '../services/authService';
+import { showApiError } from '../utils/apiError';
 import fedhubLogo from 'figma:asset/959a9d3635cfe8c94a3f28db7f3ab3925aae9843.png';
 
 interface SignInPageProps {
   loginData: { username: string; password: string; rememberMe: boolean; role?: UserRole };
   onLoginDataChange: (data: { username: string; password: string; rememberMe: boolean; role?: UserRole }) => void;
-  onSignIn: (e: React.FormEvent) => void;
+  // onSignIn can receive optional credentials to avoid relying on parent state update timing
+  onSignIn: (e?: React.FormEvent, creds?: { username: string; password: string; rememberMe: boolean }) => void;
   onBackToHome?: () => void;
 }
 
 export const SignInPage: React.FC<SignInPageProps> = ({ loginData, onLoginDataChange, onSignIn, onBackToHome }) => {
-  const [selectedAccount, setSelectedAccount] = React.useState('');
   const [showPassword, setShowPassword] = React.useState(false);
   const [email, setEmail] = React.useState('');
   const [password, setPassword] = React.useState('');
@@ -32,68 +27,37 @@ export const SignInPage: React.FC<SignInPageProps> = ({ loginData, onLoginDataCh
   const [showForgotPasswordDialog, setShowForgotPasswordDialog] = React.useState(false);
   const [resetEmail, setResetEmail] = React.useState('');
 
-  // Define one user for each role for the dropdown
-  const selectUsers = [
-    { username: 'sarah.admin', email: 'sarah.admin@company.com', displayName: 'Sarah Johnson - Administrator', role: 'admin' as UserRole },
-    { username: 'john.requestor', email: 'john.requestor@company.com', displayName: 'John Smith - Preparator', role: 'requestor' as UserRole },
-    { username: 'robert.manager', email: 'robert.manager@company.com', displayName: 'Robert Taylor - Reviewer', role: 'manager_reviewer' as UserRole },
-    { username: 'patricia.approver', email: 'patricia.approver@company.com', displayName: 'Patricia Davis - Approver', role: 'approver' as UserRole },
-  ];
-
-  const handleAccountSelect = (username: string) => {
-    const selectedUser = selectUsers.find(u => u.username === username);
-    if (selectedUser) {
-      setSelectedAccount(username);
-      setEmail(selectedUser.email);
-      setPassword('demo123');
-      onLoginDataChange({
-        ...loginData, 
-        username: username, 
-        password: 'demo123',
-        role: selectedUser.role,
-        rememberMe: rememberPassword
-      });
-    }
-  };
+  // No demo accounts: use the entered email/password to sign in.
 
   const handleEmailLogin = (e: React.FormEvent) => {
     e.preventDefault();
-    // Find user by email
-    const selectedUser = selectUsers.find(u => u.email === email);
-    if (selectedUser && password) {
-      onLoginDataChange({
-        username: selectedUser.username,
-        password: password,
-        rememberMe: rememberPassword,
-        role: selectedUser.role
-      });
-      onSignIn(e);
-    }
+    if (!email || !password) return;
+    // Use entered email as username for the login flow and call parent sign-in with credentials
+    const creds = { username: email, password, rememberMe: rememberPassword };
+    onLoginDataChange({
+      ...loginData,
+      ...creds
+    });
+    // pass credentials directly to avoid waiting for parent's state update
+    onSignIn?.(e, creds);
   };
 
-  const handleForgotPassword = (e: React.FormEvent) => {
+  const handleForgotPassword = async (e: React.FormEvent) => {
     e.preventDefault();
-    // In production, this would send a reset email
-    alert(`Password reset link sent to ${resetEmail}`);
-    setShowForgotPasswordDialog(false);
-    setResetEmail('');
+    if (!resetEmail) return;
+    try {
+      await authService.forgotPassword(resetEmail);
+      alert(`Password reset link sent to ${resetEmail}`);
+      setShowForgotPasswordDialog(false);
+      setResetEmail('');
+    } catch (err: any) {
+      console.error('Forgot password failed', err);
+      showApiError(err, { defaultMessage: 'Failed to send reset link' });
+    }
   };
 
   return (
     <div className="min-h-screen flex flex-col bg-slate-50">
-      {/* Back to Home Button */}
-      {onBackToHome && (
-        <div className="absolute top-6 left-6 z-10">
-          <Button
-            onClick={onBackToHome}
-            variant="outline"
-            className="gap-2 bg-white shadow-sm hover:bg-slate-50 text-slate-600 border-slate-200"
-          >
-            <ArrowLeft className="h-4 w-4" />
-            Back to Home
-          </Button>
-        </div>
-      )}
       
       {/* Main Content - Two Column Layout */}
       <div className="flex-1 flex items-center justify-center p-8">
@@ -112,8 +76,6 @@ export const SignInPage: React.FC<SignInPageProps> = ({ loginData, onLoginDataCh
             <div className="space-y-3">
               <h1 className="text-5xl font-bold text-slate-900 leading-tight">
                 Document Management
-                <br />
-                <span className="text-blue-600">Approval System</span>
               </h1>
               <p className="text-slate-600 text-lg leading-relaxed max-w-md">
                 Streamline your approval workflows, track document status, and maintain compliance with intelligent document management and automated routing.
@@ -252,32 +214,7 @@ export const SignInPage: React.FC<SignInPageProps> = ({ loginData, onLoginDataCh
                   </Button>
                 </form>
 
-                {/* Divider */}
-                <div className="relative">
-                  <div className="absolute inset-0 flex items-center">
-                    <Separator className="w-full bg-slate-200" />
-                  </div>
-                  <div className="relative flex justify-center text-xs uppercase">
-                    <span className="bg-white px-2 text-slate-500">Quick Login by Department (Demo)</span>
-                  </div>
-                </div>
-
-                {/* Quick Account Selection */}
-                <div className="space-y-2">
-                  <Select value={selectedAccount} onValueChange={handleAccountSelect}>
-                    <SelectTrigger className="w-full h-11 bg-slate-50 border-slate-200 text-slate-900">
-                      <SelectValue placeholder="Choose demo account..." />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {selectUsers.map(user => (
-                        <SelectItem key={user.username} value={user.username}>{user.displayName}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                  <p className="text-xs text-slate-500 mt-1">
-                    Selecting a demo account will auto-fill email and password
-                  </p>
-                </div>
+                {/* Demo block removed - form submits entered credentials on submit */}
               </CardContent>
             </Card>
 
