@@ -3,6 +3,8 @@ import { Button } from './ui/button';
 import { LogOut, User, Menu } from 'lucide-react';
 import { ViewType } from '../types';
 import logo from 'figma:asset/959a9d3635cfe8c94a3f28db7f3ab3925aae9843.png';
+import { authService } from '../services/authService';
+import { toast } from './ui/sonner';
 
 interface HeaderProps {
   isSignedIn: boolean;
@@ -49,7 +51,25 @@ export const Header: React.FC<HeaderProps> = ({
             </div>
             <Button
               variant="outline"
-              onClick={onSignOut}
+              onClick={async () => {
+                try {
+                  if (onSignOut) {
+                    const res = await onSignOut();
+                    if (res && res.message) {
+                      res.ok ? toast.success(res.message) : toast.error(res.message);
+                    }
+                  } else {
+                    const res = await authService.logout(true);
+                    if (res && res.message) {
+                      res.ok ? toast.success(res.message) : toast.error(res.message);
+                    }
+                    window.location.reload();
+                  }
+                } catch (err) {
+                  console.warn('Logout failed (header button)', err);
+                  toast.error('Logout failed');
+                }
+              }}
               className="flex items-center space-x-2 border-white text-white hover:bg-white hover:text-logo-blue"
             >
               <LogOut className="h-4 w-4" />

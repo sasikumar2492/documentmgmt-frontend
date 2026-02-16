@@ -3,6 +3,8 @@ import { Button } from './ui/button';
 import { LogOut, User, Search, Bell, Share2, Download, Settings, Sparkles, Menu, MessageCircle, Zap, Brain, ChevronDown, Building2 } from 'lucide-react';
 import logo from 'figma:asset/959a9d3635cfe8c94a3f28db7f3ab3925aae9843.png';
 import { NotificationCenter } from './NotificationCenter';
+import { toast } from './ui/sonner';
+import { authService } from '../services/authService';
 import { AIAssistant } from './AIAssistant';
 import { ChatPanel } from './ChatPanel';
 import { NotificationData, ViewType, UserRole } from '../types';
@@ -25,6 +27,9 @@ interface LoginHeaderProps {
   onChatToggle?: () => void;
   isSidebarCollapsed?: boolean;
   userRole?: UserRole;
+  normalizedRole?: UserRole;
+  permissionCount?: number;
+  currentUserRoles?: string[];
   username?: string;
 }
 
@@ -45,6 +50,9 @@ export const LoginHeader: React.FC<LoginHeaderProps> = ({
   onChatToggle,
   isSidebarCollapsed = false,
   userRole = 'admin',
+  normalizedRole,
+  currentUserRoles = [],
+  permissionCount = 0,
   username = 'User'
 }) => {
   const [localIsChatOpen, setLocalIsChatOpen] = useState(isChatOpen);
@@ -53,9 +61,15 @@ export const LoginHeader: React.FC<LoginHeaderProps> = ({
   const userMenuRef = useRef<HTMLDivElement>(null);
   const settingsMenuRef = useRef<HTMLDivElement>(null);
 
+  const effectiveRole = (() => {
+    const raw = (userRole || '').toString().toLowerCase();
+    if (raw.includes('admin') || raw.includes('administrator')) return 'admin' as UserRole;
+    return (normalizedRole || userRole) as UserRole;
+  })();
+
   // Filter notifications based on user role - show only notifications targeted to their role
   const filteredNotifications = notifications.filter(notification => 
-    !notification.targetRoles || notification.targetRoles.length === 0 || notification.targetRoles.includes(userRole)
+    !notification.targetRoles || notification.targetRoles.length === 0 || notification.targetRoles.includes(effectiveRole)
   );
 
   // Close user menu when clicking outside
@@ -209,8 +223,13 @@ export const LoginHeader: React.FC<LoginHeaderProps> = ({
                     <span className="text-sm font-medium">{getUserInitials()}</span>
                   </div>
                   <div className="hidden lg:flex flex-col items-start">
-                    <span className="text-sm font-medium text-slate-700">{username}</span>
-                    <span className="text-xs text-slate-500">{getRoleName(userRole)}</span>
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm font-medium text-slate-700">{username}</span>
+                      <span className="text-xs text-slate-500">{getRoleName(effectiveRole)}</span>
+                      {typeof permissionCount === 'number' && (
+                        <span className="text-xs text-slate-400">({permissionCount} perms)</span>
+                      )}
+                    </div>
                   </div>
                   <ChevronDown className={`h-4 w-4 text-slate-400 transition-transform ${isUserMenuOpen ? 'rotate-180' : ''}`} />
                 </button>
@@ -314,10 +333,16 @@ export const LoginHeader: React.FC<LoginHeaderProps> = ({
                     {username.toLowerCase().replace(/\s+/g, '.')}@company.com
                   </p>
                   <div className="mt-2.5">
-                    <span className="inline-flex items-center px-3 py-1.5 rounded-full text-xs font-medium bg-red-100 text-red-700 border border-red-200">
+                      <span className="inline-flex items-center px-3 py-1.5 rounded-full text-xs font-medium bg-red-100 text-red-700 border border-red-200">
                       <span className="w-1.5 h-1.5 rounded-full bg-red-500 mr-1.5"></span>
-                      {getRoleName(userRole)}
+                      {getRoleName(effectiveRole)}
+                      {userRole && (
+                        <span className="ml-2 text-xs text-slate-400">({userRole})</span>
+                      )}
                     </span>
+                    {currentUserRoles && currentUserRoles.length > 0 && (
+                      <div className="text-xs text-slate-400 mt-1">Raw roles: {currentUserRoles.join(', ')}</div>
+                    )}
                   </div>
                 </div>
               </div>
@@ -340,10 +365,26 @@ export const LoginHeader: React.FC<LoginHeaderProps> = ({
 
               <button
                 className="w-full px-5 py-3 text-left text-sm text-red-600 hover:bg-red-50 flex items-center space-x-3 transition-colors font-medium"
-                onClick={() => {
+                onClick={async () => {
                   setIsUserMenuOpen(false);
-                  if (onSignOut) {
-                    onSignOut();
+                  try {
+                    if (onSignOut) {
+                      const res = await onSignOut();
+                      // if parent returned a result use it
+                      if (res && res.message) {
+                        res.ok ? toast.success(res.message) : toast.error(res.message);
+                      }
+                    } else {
+                      const res = await authService.logout(true);
+                      if (res && res.message) {
+                        res.ok ? toast.success(res.message) : toast.error(res.message);
+                      }
+                      // fallback: reload to clear any in-memory state
+                      window.location.reload();
+                    }
+                  } catch (err) {
+                    console.warn('Logout failed (header)', err);
+                    toast.error('Logout failed');
                   }
                 }}
               >

@@ -54,10 +54,11 @@ import { ActivityLogDetail } from './components/ActivityLogDetail';
 import { RemarksInbox } from './components/RemarksInbox';
 import { DocumentEditScreen } from './components/DocumentEditScreen';
 import { DocumentPreviewScreen } from './components/DocumentPreviewScreen';
-import { Toaster } from './components/ui/sonner';
-import { toast } from 'sonner@2.0.3';
+import { Toaster, toast } from './components/ui/sonner';
+import { showApiError } from './utils/apiError';
 import { parseExcelToFormSections, extractDepartmentFromFilename, formSectionsToFormData } from './utils/excelParser';
 import { parseWordToFormSections } from './utils/wordParser';
+import { uploadDocx } from './services/uploadService';
 import { parsePdfToFormSections } from './utils/pdfParser';
 import { generateWorkflowFromSections } from './utils/workflowGenerator';
 import { generateElectronicSignature, requiresSignature } from './utils/signatureGenerator';
@@ -66,9 +67,11 @@ import { Badge } from './components/ui/badge';
 import { CheckCircle, Clock, FileSignature } from 'lucide-react';
 
 import { SubmissionAssignmentModal } from './components/SubmissionAssignmentModal';
+import { authService } from './services/authService';
+import { tokenStorage } from './utils/tokenStorage';
 
 export default function App() {
-  const [showHomePage, setShowHomePage] = useState(true);
+  const [showHomePage, setShowHomePage] = useState(false);
   const [isSubmissionModalOpen, setIsSubmissionModalOpen] = useState(false);
   const [pendingSubmissionData, setPendingSubmissionData] = useState<{ id: string; title: string } | null>(null);
   const [showTicketFlowLogin, setShowTicketFlowLogin] = useState(false);
@@ -84,7 +87,9 @@ export default function App() {
     rememberMe: false,
     role: 'admin' as UserRole
   });
-  const [currentView, setCurrentView] = useState<ViewType>('dashboard');
+  const [currentUser, setCurrentUser] = useState<any | null>(null);
+  const [userPermissions, setUserPermissions] = useState<string[]>([]);
+  const [currentView, setCurrentView] = useState<ViewType>('document-management');
   const [currentPage, setCurrentPage] = useState(1);
   const [currentDocumentId, setCurrentDocumentId] = useState<string | null>(null);
   const [selectedFiles, setSelectedFiles] = useState<FileList | null>(null);
@@ -123,15 +128,134 @@ export default function App() {
     fileType: string;
   } | null>(null);
   
-  // Current user data (mock - in production this would come from auth)
-  const currentUser = {
-    id: '1',
-    name: loginData.username || 'Admin User',
-    email: 'admin@company.com',
-    role: 'Admin',
-    isAdmin: true,
-    department: 'Engineering'
+  // Helpers to interpret server roles and map to UI role / view
+  const getPrimaryServerRole = (user: any) => {
+    const roles = (user?.roles && Array.isArray(user.roles) ? user.roles : (user?.role ? [user.role] : []));
+    return (roles[0] || 'user').toString().toLowerCase();
   };
+
+  const getNormalizedRole = (user: any) => {
+    const roles = (user?.roles && Array.isArray(user.roles) ? user.roles : (user?.role ? [user.role] : []))
+      .map((r: string) => (r || '').toString().toLowerCase());
+    console.log(roles)
+    const has = (matcher: string) => roles.some((r: string) => r.includes(matcher));
+    if (has('administrator') || has('admin')) return 'administrator';
+    if (has('preparator')) return 'preparator';
+    if (has('reviewer') || has('review')) return 'reviewer';
+    if (has('approver')) return 'approver';
+  };
+
+  const getPermissionsForNormalizedRole = (normRole: string) => {
+    // Map normalized roles to default permission sets
+    const map: Record<string, string[]> = {
+      admin: [
+        // Admin = all permissions (approx)
+        'upload_templates','view_templates','delete_templates','download_templates',
+        'raise_request','view_requests','approve_reject_requests','edit_requests','delete_requests',
+        'view_reports','generate_reports','export_reports','download_reports',
+        'view_documents','upload_documents','delete_documents','manage_documents',
+        'view_workflows','configure_workflows','manage_workflow_steps','assign_workflow_tasks',
+        'view_users','add_users','edit_users','delete_users','manage_roles',
+        'system_settings','department_settings','notification_settings','email_configuration'
+      ],
+      manager: [
+        'upload_templates','view_templates','download_templates',
+        'raise_request','view_requests','approve_reject_requests','edit_requests',
+        'view_reports','generate_reports','export_reports','download_reports',
+        'view_documents','upload_documents','manage_documents',
+        'view_workflows','configure_workflows','manage_workflow_steps','assign_workflow_tasks',
+        'view_users','department_settings'
+      ],
+      requestor: [
+        'view_templates','download_templates',
+        'raise_request','view_requests',
+        'view_reports','download_reports',
+        'view_documents','upload_documents'
+      ],
+      viewer: [
+        'view_templates','view_requests','view_reports','view_documents','view_workflows'
+      ],
+      approver: [
+        'view_templates','view_requests','approve_reject_requests','view_documents','view_reports'
+      ],
+      manager_reviewer: [
+        'view_templates','view_requests','view_documents','view_reports','approve_reject_requests'
+      ]
+    };
+    return map[normRole] || map.requestor;
+  };
+
+  // Permission check helper for views
+  const canAccessView = (view: ViewType, rawRole: string, normalized?: string, currentUserRoles?: string[] | null) => {
+    const raw = (rawRole || '').toString().toLowerCase();
+    const norm = (normalized || '').toString().toLowerCase();
+    const rolesFromUser = Array.isArray(currentUserRoles) ? currentUserRoles.map(r => (r || '').toString().toLowerCase()) : [];
+    const isAdmin = raw.includes('admin') || raw.includes('administrator') || norm === 'admin' || rolesFromUser.some(r => r.includes('admin') || r.includes('administrator'));
+    const isPreparator = norm === 'preparator' || raw.includes('preparator') || raw.includes('requestor') || rolesFromUser.some(r => r.includes('preparator') || r.includes('requestor'));
+
+    // Document Effectiveness & Versioning: admin only
+    if (view === 'document-effectiveness' || view === 'document-versioning') {
+      return isAdmin;
+    }
+
+    // Upload templates / AI conversion preview: admin and preparator
+    if (view === 'upload-templates' || view === 'ai-conversion-preview') {
+      return isAdmin || isPreparator;
+    }
+
+    // default allow
+    return true;
+  };
+
+  React.useEffect(() => {
+    let mounted = true;
+    (async () => {
+      const access = tokenStorage.getAccessToken();
+      const refresh = tokenStorage.getRefreshToken();
+      if (!access && !refresh) return;
+      try {
+        const user = await authService.getCurrentUser();
+        if (!mounted) return;
+        if (user) {
+          const primaryRole = getPrimaryServerRole(user);
+          const normalizedRole = getNormalizedRole(user);
+          setCurrentUser(user);
+          const storedRole = normalizedRole === 'admin' ? 'admin' : primaryRole;
+          console.debug('[Auth] restoreSession user.roles=', user?.roles, 'primaryRole=', primaryRole, 'normalizedRole=', normalizedRole, 'storedRole=', storedRole);
+          setLoginData(prev => ({ ...prev, role: storedRole, normalizedRole, username: user?.fullName || user?.username || prev.username }));
+          setUserPermissions(getPermissionsForNormalizedRole(normalizedRole));
+          setIsSignedIn(true);
+          // Set initial view for restored session
+          if (normalizedRole === 'admin' || (user?.roles || []).some((r: string) => r.toLowerCase().includes('admin') || r.toLowerCase().includes('administrator'))) {
+            setCurrentView('admin-home');
+          } else if ((user?.roles || []).some((r: string) => r.toLowerCase().includes('manager_reviewer')) || primaryRole === 'manager_reviewer' || normalizedRole === 'manager_reviewer') {
+            setCurrentView('reports');
+          } else if ((user?.roles || []).some((r: string) => r.toLowerCase().includes('approver')) || normalizedRole === 'approver') {
+            setCurrentView('document-library');
+          } else if ((user?.roles || []).some((r: string) => r.toLowerCase().includes('manager')) || primaryRole === 'manager' || normalizedRole === 'manager') {
+            setCurrentView('document-management');
+          } else {
+            setCurrentView('dashboard');
+          }
+        }
+      } catch (err) {
+        console.warn('Failed to restore session', err);
+      }
+    })();
+    return () => { mounted = false; };
+  }, []);
+  
+  // Ensure currentView stays within allowed views for current role
+  React.useEffect(() => {
+    const allowed = canAccessView(currentView, (loginData as any).role || '', (loginData as any).normalizedRole, currentUser?.roles);
+    if (!allowed) {
+      // silently redirect to dashboard if current view became unauthorized
+      setCurrentView('dashboard');
+      toast.info('Redirected: current view not allowed for your role.');
+    }
+  }, [currentView, (loginData as any).role, (loginData as any).normalizedRole]);
+  
+  // Current user state is stored in `currentUser` and populated from API on login
   
   // Ensure currentFormData is never undefined by providing a fallback
   const [currentFormData, setCurrentFormData] = useState<FormData>(() => {
@@ -355,60 +479,107 @@ export default function App() {
     }
   };
 
-  const handleSignIn = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (loginData.username && loginData.password) {
+  const handleSignIn = async (e?: React.FormEvent, creds?: { username: string; password: string; rememberMe: boolean }) => {
+    if (e && typeof (e as any).preventDefault === 'function') (e as React.FormEvent).preventDefault();
+    const username = creds?.username || loginData.username;
+    const password = creds?.password || loginData.password;
+    const rememberMe = creds?.rememberMe ?? loginData.rememberMe;
+    if (!username || !password) return;
+
+    try {
+      const { user } = await authService.login({
+        email: username,
+        password,
+        context: 'dms'
+      });
+      
+      let primaryRole = getPrimaryServerRole(user);
+      let normalizedRole = getNormalizedRole(user);
+      // store user info from server and normalize username display
+      setCurrentUser(user);
+      const storedRole = normalizedRole === 'admin' ? 'admin' : primaryRole;
+      console.debug('[Auth] signIn user.roles=', user?.roles, 'primaryRole=', primaryRole, 'normalizedRole=', normalizedRole, 'storedRole=', storedRole);
+      setLoginData(prev => ({ 
+        ...prev, 
+        role: storedRole, 
+        normalizedRole, 
+        username: user?.fullName || user?.username || user?.email || username 
+      }));
+      // set permissions for the normalized role
+      setUserPermissions(getPermissionsForNormalizedRole(normalizedRole));
       setIsSignedIn(true);
+
       if (intendedModule === 'ticket-flow') {
         setCurrentView('ticket-flow');
-      } else if (loginData.role.toLowerCase().includes('approver')) {
-        setCurrentView('document-library');
-      } else if (loginData.role === 'admin') {
+      } else if (normalizedRole === 'admin' || (user?.roles || []).some((r: string) => r.toLowerCase().includes('admin') || r.toLowerCase().includes('administrator'))) {
+        // Admins go to admin-home
         setCurrentView('admin-home');
+      } else if ((user?.roles || []).some((r: string) => r.toLowerCase().includes('manager_reviewer')) || primaryRole === 'manager_reviewer' || normalizedRole === 'manager_reviewer') {
+        setCurrentView('reports');
+      } else if ((user?.roles || []).some((r: string) => r.toLowerCase().includes('approver')) || normalizedRole === 'approver') {
+        setCurrentView('document-library');
+      } else if ((user?.roles || []).some((r: string) => r.toLowerCase().includes('manager')) || primaryRole === 'manager' || normalizedRole === 'manager') {
+        setCurrentView('document-management');
       } else {
         setCurrentView('dashboard');
       }
       setIntendedModule(null);
+    } catch (err: any) {
+      console.error('Login failed', err);
+      showApiError(err, { defaultMessage: 'Login failed' });
     }
   };
 
-  const handleSignOut = () => {
-    setIsSignedIn(false);
-    setLoginData({ username: '', password: '', rememberMe: false, role: 'admin' });
-    setCurrentView('dashboard');
-    setShowHomePage(false); // Navigate directly to login page
-    setIntendedModule(null);
-  };
-
-  const handleTicketFlowLogin = (username: string, password: string) => {
-    if (username && password) {
-      if (ticketFlowLoginModule === 'dms') {
-        let role: UserRole = 'admin';
-        if (username.includes('preparator')) role = 'preparator';
-        else if (username.includes('reviewer')) {
-          const match = username.match(/reviewer\s*(\d+)/i);
-          role = match ? `Reviewer ${match[1]}` as UserRole : 'Reviewer 1';
-        }
-        else if (username.includes('approver')) {
-          const match = username.match(/approver\s*(\d+)/i);
-          role = match ? `Approver ${match[1]}` as UserRole : 'approver';
-        }
-        else if (username.includes('manager')) {
-          if (username === 'robert.manager') role = 'manager_reviewer';
-          else role = 'manager';
-        }
-        
-        setLoginData({ username, password, rememberMe: false, role });
-        setIsSignedIn(true);
-        if (role === 'admin') setCurrentView('admin-home');
-        else if (role === 'manager') setCurrentView('document-management');
-        else setCurrentView('dashboard');
+  const handleSignOut = async () => {
+    try {
+      const result = await authService.logout(true);
+      if (result && result.message) {
+        if (result.ok) toast.success(result.message);
+        else toast.error(result.message);
       } else {
-        setTicketFlowUser({ username, password });
-        setIsTicketFlowSignedIn(true);
+        toast.success('Signed out');
       }
-      setShowTicketFlowLogin(false);
+    } catch (err) {
+      console.warn('Sign out failed', err);
+      toast.error('Sign out failed');
+    } finally {
+      setIsSignedIn(false);
+      setLoginData({ username: '', password: '', rememberMe: false, role: 'admin' });
+      setCurrentUser(null);
+      setCurrentView('dashboard');
+      setShowHomePage(false); // Navigate directly to login page
+      setIntendedModule(null);
     }
+  };
+
+  const handleTicketFlowLogin = async (username: string, password: string) => {
+    if (!username || !password) return;
+
+    if (ticketFlowLoginModule === 'dms') {
+      try {
+        const { user } = await authService.login({ email: username, password, context: 'dms' });
+          const primaryRole = getPrimaryServerRole(user);
+          const normalizedRole = getNormalizedRole(user);
+          setCurrentUser(user);
+          const storedRole = normalizedRole === 'admin' ? 'admin' : primaryRole;
+          console.debug('[Auth] ticketFlowLogin user.roles=', user?.roles, 'primaryRole=', primaryRole, 'normalizedRole=', normalizedRole, 'storedRole=', storedRole);
+          setLoginData({ username: user?.fullName || user?.username || username, password, rememberMe: false, role: storedRole, normalizedRole });
+          setUserPermissions(getPermissionsForNormalizedRole(normalizedRole));
+        setIsSignedIn(true);
+        const norm = normalizedRole === 'admin' || (user?.roles || []).some((r: string) => r.toLowerCase().includes('admin') || r.toLowerCase().includes('administrator'));
+        if (norm) setCurrentView('admin-home');
+        else if (normalizedRole === 'manager_reviewer' || (user?.roles || []).some((r: string) => r.toLowerCase().includes('manager_reviewer'))) setCurrentView('reports');
+        else if (normalizedRole === 'manager' || (user?.roles || []).some((r: string) => r.toLowerCase().includes('manager'))) setCurrentView('document-management');
+        else setCurrentView('dashboard');
+      } catch (err) {
+        console.error('TicketFlow login failed', err);
+        showApiError(err, { defaultMessage: 'Login failed' });
+      }
+    } else {
+      setTicketFlowUser({ username, password });
+      setIsTicketFlowSignedIn(true);
+    }
+    setShowTicketFlowLogin(false);
   };
 
   const handleTicketFlowSignOut = () => {
@@ -418,6 +589,12 @@ export default function App() {
   };
 
   const handleViewChange = (view: ViewType) => {
+    // enforce access control for views
+    const allowed = canAccessView(view, (loginData as any).role || '', (loginData as any).normalizedRole, currentUser?.roles);
+    if (!allowed) {
+      toast.error('Access denied for your role.');
+      return;
+    }
     setPreviousView(currentView);
     setCurrentView(view);
     if (view === 'approval-form' || view === 'dynamic-form') {
@@ -453,6 +630,19 @@ export default function App() {
         if (fileType === 'xlsx' || fileType === 'xls') {
           parsedSections = await parseExcelToFormSections(file);
         } else if (fileType === 'doc' || fileType === 'docx') {
+          // Call backend upload-docx endpoint for AI processing (server-side)
+          try {
+            toast.info('Uploading document for AI processing...');
+            const uploadResp = await uploadDocx(file);
+            console.debug('uploadDocx response', uploadResp);
+            if (uploadResp?.message) {
+              toast.success(uploadResp.message);
+            }
+          } catch (uErr: any) {
+            console.warn('uploadDocx failed', uErr);
+            // show non-blocking error but continue to attempt local parsing
+            toast.error(uErr?.message || 'Failed to upload document for AI processing');
+          }
           parsedSections = await parseWordToFormSections(file);
         } else if (fileType === 'pdf') {
           parsedSections = await parsePdfToFormSections(file);
@@ -1105,76 +1295,92 @@ export default function App() {
 
   if (showHomePage) {
     return (
-      <HomePage 
-        onNavigateToDMS={() => { 
-          setShowHomePage(false); 
-          setIntendedModule('dms'); 
-          setShowTicketFlowLogin(false);
-        }}
-        onNavigateToLogin={() => { 
-          setShowHomePage(false); 
-          setShowTicketFlowLogin(false);
-        }}
-        onNavigateToTicketFlow={() => { 
-          setShowHomePage(false); 
-          setIntendedModule('ticket-flow');
-          setTicketFlowLoginModule('ticketflow');
-          setShowTicketFlowLogin(true);
-        }}
-      />
+      <>
+        <HomePage
+          onNavigateToDMS={() => {
+            setShowHomePage(false);
+            setIntendedModule('dms');
+            setShowTicketFlowLogin(false);
+          }}
+          onNavigateToLogin={() => {
+            setShowHomePage(false);
+            setShowTicketFlowLogin(false);
+          }}
+          onNavigateToTicketFlow={() => {
+            setShowHomePage(false);
+            setIntendedModule('ticket-flow');
+            setTicketFlowLoginModule('ticketflow');
+            setShowTicketFlowLogin(true);
+          }}
+        />
+        <Toaster />
+      </>
     );
   }
 
   if (showTicketFlowLogin) {
     return (
-      <TicketFlowLogin 
-        onLogin={handleTicketFlowLogin}
-        onBackToHome={() => {
-          setShowTicketFlowLogin(false);
-          setShowHomePage(true);
-        }}
-        moduleType={ticketFlowLoginModule}
-      />
+      <>
+        <TicketFlowLogin
+          onLogin={handleTicketFlowLogin}
+          onBackToHome={() => {
+            setShowTicketFlowLogin(false);
+            setShowHomePage(true);
+          }}
+          moduleType={ticketFlowLoginModule}
+        />
+        <Toaster />
+      </>
     );
   }
 
   if (!isSignedIn) {
     return (
-      <SignInPage 
-        loginData={loginData}
-        onLoginDataChange={(data) => setLoginData({ ...loginData, ...data })}
-        onSignIn={handleSignIn}
-        onBackToHome={() => setShowHomePage(true)}
-      />
+      <>
+        <SignInPage
+          loginData={loginData}
+          onLoginDataChange={(data) => setLoginData({ ...loginData, ...data })}
+          onSignIn={handleSignIn}
+          onBackToHome={() => setShowHomePage(true)}
+        />
+        <Toaster />
+      </>
     );
   }
 
   return (
     <div className="h-screen flex overflow-hidden">
       <div className="flex-shrink-0">
-        {loginData.role === 'admin' ? (
-          <AdminSidebar
-            currentView={currentView}
-            onViewChange={handleViewChange}
-            userRole={loginData.role}
-            isCollapsed={isSidebarCollapsed}
-            onToggleCollapse={handleSidebarToggle}
-          />
-        ) : (
-          <LeftSidebar
-            isCollapsed={isSidebarCollapsed}
-            currentView={currentView}
-            onViewChange={handleViewChange}
-            onToggleCollapse={handleSidebarToggle}
-            onChatToggle={handleChatToggle}
-            userRole={loginData.role}
-          />
-        )}
+        {(() => {
+          const rawRole = ((loginData as any).role || '').toString().toLowerCase();
+          const effectiveRole = (rawRole.includes('admin') || rawRole.includes('administrator')) ? 'admin' : ((loginData as any).normalizedRole || loginData.role);
+          if (effectiveRole === 'admin') {
+            return (
+              <AdminSidebar
+                currentView={currentView}
+                onViewChange={handleViewChange}
+                userRole={effectiveRole}
+                isCollapsed={isSidebarCollapsed}
+                onToggleCollapse={handleSidebarToggle}
+              />
+            );
+          }
+          return (
+            <LeftSidebar
+              isCollapsed={isSidebarCollapsed}
+              currentView={currentView}
+              onViewChange={handleViewChange}
+              onToggleCollapse={handleSidebarToggle}
+              onChatToggle={handleChatToggle}
+              userRole={effectiveRole}
+            />
+          );
+        })()}
       </div>
       
       <div className="flex-1 flex flex-col overflow-hidden">
         <div className="h-16 flex-shrink-0">
-          <LoginHeader 
+        <LoginHeader 
             onSignOut={handleSignOut} 
             notifications={notifications}
             isNotificationOpen={isNotificationOpen}
@@ -1191,7 +1397,10 @@ export default function App() {
             onChatToggle={handleChatToggle}
             isSidebarCollapsed={isSidebarCollapsed}
             userRole={loginData.role}
-            username={loginData.username}
+            normalizedRole={(loginData as any).normalizedRole}
+            currentUserRoles={currentUser?.roles}
+            permissionCount={userPermissions.length}
+            username={currentUser?.fullName || (loginData as any).username}
           />
         </div>
         
