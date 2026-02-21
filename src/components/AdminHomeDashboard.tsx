@@ -1,4 +1,5 @@
 import React from 'react';
+import { dashboardService } from '../services/dashboardService';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from './ui/card';
 import { 
   Users, 
@@ -23,10 +24,36 @@ interface AdminHomeDashboardProps {
 }
 
 export const AdminHomeDashboard: React.FC<AdminHomeDashboardProps> = ({ onNavigate }) => {
+  const [kpis, setKpis] = React.useState<any | null>(null);
+  const [recentTemplates, setRecentTemplates] = React.useState<any[]>([]);
+  const [recentRequests, setRecentRequests] = React.useState<any[]>([]);
+  
+  React.useEffect(() => {
+    let mounted = true;
+    (async () => {
+      try {
+        const [kpiResp, templatesResp, requestsResp] = await Promise.all([
+          dashboardService.getKPIs('30d'),
+          dashboardService.getRecentTemplates(5, '30d'),
+          dashboardService.getRecentRequests(5, '30d')
+        ]);
+
+        if (!mounted) return;
+        if (kpiResp) setKpis(kpiResp);
+        if (templatesResp && Array.isArray(templatesResp.items)) setRecentTemplates(templatesResp.items);
+        if (requestsResp && Array.isArray(requestsResp.items)) setRecentRequests(requestsResp.items);
+      } catch (err) {
+        console.warn('[AdminHomeDashboard] fetch failed', err);
+      }
+    })();
+    return () => { mounted = false; };
+  }, []);
+
+  // Derived stats for display with sensible fallbacks
   const stats = [
     {
       title: 'Total Users',
-      value: '248',
+      value: kpis?.totalUsers ?? '—',
       change: '+12%',
       trend: 'up',
       icon: Users,
@@ -35,7 +62,7 @@ export const AdminHomeDashboard: React.FC<AdminHomeDashboardProps> = ({ onNaviga
     },
     {
       title: 'Active Requests',
-      value: '64',
+      value: kpis?.totalRequests ?? '—',
       change: '+8%',
       trend: 'up',
       icon: FileText,
@@ -44,7 +71,7 @@ export const AdminHomeDashboard: React.FC<AdminHomeDashboardProps> = ({ onNaviga
     },
     {
       title: 'Departments',
-      value: '12',
+      value: kpis?.totalDepartments ?? '—',
       change: '+2',
       trend: 'up',
       icon: Building2,
@@ -53,8 +80,8 @@ export const AdminHomeDashboard: React.FC<AdminHomeDashboardProps> = ({ onNaviga
     },
     {
       title: 'System Health',
-      value: '98.5%',
-      change: '-0.3%',
+      value: kpis?.systemHealth ?? '—',
+      change: kpis?.systemHealthChange ?? '-',
       trend: 'down',
       icon: Activity,
       gradient: 'from-green-500 to-emerald-600',

@@ -58,7 +58,8 @@ import { Toaster, toast } from './components/ui/sonner';
 import { showApiError } from './utils/apiError';
 import { parseExcelToFormSections, extractDepartmentFromFilename, formSectionsToFormData } from './utils/excelParser';
 import { parseWordToFormSections } from './utils/wordParser';
-import { uploadDocx } from './services/uploadService';
+import { documentService } from './services/documentService';
+import { dashboardService } from './services/dashboardService';
 import { parsePdfToFormSections } from './utils/pdfParser';
 import { generateWorkflowFromSections } from './utils/workflowGenerator';
 import { generateElectronicSignature, requiresSignature } from './utils/signatureGenerator';
@@ -117,6 +118,7 @@ export default function App() {
     department: string;
     fileSize: string;
     uploadDate: string;
+    serverHtml?: string | null;
   } | null>(null);
   const [pendingWorkflow, setPendingWorkflow] = useState<{
     workflow: any[];
@@ -214,6 +216,8 @@ export default function App() {
       const refresh = tokenStorage.getRefreshToken();
       if (!access && !refresh) return;
       try {
+        let uploadResp: any = undefined;
+        let serverHtml: string | undefined = undefined;
         const user = await authService.getCurrentUser();
         if (!mounted) return;
         if (user) {
@@ -254,6 +258,62 @@ export default function App() {
       toast.info('Redirected: current view not allowed for your role.');
     }
   }, [currentView, (loginData as any).role, (loginData as any).normalizedRole]);
+  
+  // Fetch dashboard data (KPIs, recent templates, recent requests) after sign-in
+  React.useEffect(() => {
+    let mounted = true;
+    if (!isSignedIn) return;
+    (async () => {
+      try {
+        const [templatesResp, requestsResp, kpisResp] = await Promise.all([
+          dashboardService.getRecentTemplates(10, '30d'),
+          dashboardService.getRecentRequests(10, '30d'),
+          dashboardService.getKPIs('30d')
+        ]);
+
+        if (!mounted) return;
+
+        // Map recent templates into TemplateData shape if available
+        if (templatesResp && Array.isArray(templatesResp.items)) {
+          const mappedTemplates = templatesResp.items.map((t: any) => ({
+            id: t.id || t.templateId || `${t.name || t.originalFileName}-${Date.now()}`,
+            fileName: t.name || t.originalFileName || t.fileName || 'Untitled',
+            uploadDate: t.uploadDate || t.createdAt || new Date().toISOString().split('T')[0],
+            fileSize: t.fileSize || t.size || '0 MB',
+            department: (t.department || t.departmentId || '').toString().toLowerCase(),
+            status: t.status || 'pending',
+            parsedSections: t.parsedSections || []
+          }));
+          setTemplates(mappedTemplates);
+        }
+
+        // Map recent requests into ReportData shape if available
+        if (requestsResp && Array.isArray(requestsResp.items)) {
+          const mappedReports = requestsResp.items.map((r: any, idx: number) => ({
+            id: r.id || r.requestId || `req_${Date.now()}_${idx}`,
+            requestId: r.requestId || r.id || `REQ${Date.now()}`,
+            fileName: r.fileName || r.title || 'Request Document',
+            uploadDate: r.uploadDate || r.createdAt || new Date().toISOString().split('T')[0],
+            assignedTo: r.assignedTo || r.assignee || 'Unassigned',
+            department: (r.department || r.departmentId || '').toString().toLowerCase(),
+            status: (r.status || 'pending'),
+            lastModified: r.lastModified || r.updatedAt || new Date().toISOString(),
+            fileSize: r.fileSize || r.size || '0 MB',
+            formData: r.formData || undefined
+          }));
+          setReports(mappedReports);
+        }
+
+        // Optionally log KPIs - we don't currently store them but can later
+        if (kpisResp) {
+          console.debug('[Dashboard] KPIs', kpisResp);
+        }
+      } catch (err) {
+        console.warn('Failed to fetch dashboard data', err);
+      }
+    })();
+    return () => { mounted = false; };
+  }, [isSignedIn]);
   
   // Current user state is stored in `currentUser` and populated from API on login
   
@@ -616,7 +676,7 @@ export default function App() {
     }
   };
 
-  const handleUploadSubmit = async () => {
+  const handleUploadSubmit = async (meta?: { name?: string; description?: string; departmentId?: string; organizationId?: string }) => {
     if (selectedFiles && selectedFiles.length > 0) {
       const file = selectedFiles[0];
       const fileType = file.name.split('.').pop()?.toLowerCase() || '';
@@ -625,21 +685,60 @@ export default function App() {
         description: 'AI is processing the document structure and generating a workflow.',
       });
       
+      // local vars for upload response and server HTML (avoid leaking from other scopes)
+      let uploadResp: any = undefined;
+      let serverHtml: string | undefined = undefined;
+
       try {
         let parsedSections: FormSection[] = [];
         if (fileType === 'xlsx' || fileType === 'xls') {
           parsedSections = await parseExcelToFormSections(file);
         } else if (fileType === 'doc' || fileType === 'docx') {
-          // Call backend upload-docx endpoint for AI processing (server-side)
+          // Call backend templates upload endpoint for AI processing (server-side)
           try {
             toast.info('Uploading document for AI processing...');
-            const uploadResp = await uploadDocx(file);
-            console.debug('uploadDocx response', uploadResp);
+            // ensure mandatory metadata
+            uploadResp = await documentService.uploadDocument(file, {
+              name: meta?.name || file.name,
+              description: meta?.description || '',
+              departmentId: meta?.departmentId || selectedDepartment || '',
+              organizationId: meta?.organizationId || ''
+            });
+            console.debug('documentService.uploadDocument response', uploadResp);
             if (uploadResp?.message) {
               toast.success(uploadResp.message);
+            } else {
+              toast.success('Uploaded for processing');
+            }
+            // Prefer server-provided HTML for preview. Try multiple common keys.
+            if (uploadResp) {
+              // try common keys across different backend shapes
+              serverHtml = "<style>\n  table {\n    width: 100%;\n    border-collapse: collapse;\n    margin-bottom: 1em;\n  }\n\n  th,\n  td {\n    border: 1px solid black;\n    padding: 8px;\n    text-align: left;\n    vertical-align: top;\n  }\n\n  .header-table th,\n  .header-table td {\n    padding: 4px 8px;\n  }\n\n  .signatories-table th,\n  .signatories-table td {\n    border: 1px solid black;\n    padding: 8px;\n    text-align: left;\n  }\n\n  ul,\n  ol {\n    margin-left: 20px;\n    padding-left: 0;\n  }\n\n  li {\n    margin-bottom: 0.5em;\n  }\n</style>\n\n<div>\n  <table class=\"header-table\">\n    <tbody>\n      <tr>\n        <td colspan=\"2\"><strong>RISENSUN DIGITIZATION PVT LTD.</strong></td>\n        <td>SOP No.: RSD-SOP-034</td>\n      </tr>\n      <tr>\n        <td colspan=\"2\"><strong>PRODUCT DEVELOPMENT</strong></td>\n        <td>Version No.: 00</td>\n      </tr>\n      <tr>\n        <td colspan=\"2\"></td>\n        <td>Effective Date:</td>\n      </tr>\n      <tr>\n        <td colspan=\"2\"></td>\n        <td>Revision Date:</td>\n      </tr>\n    </tbody>\n  </table>\n\n  <h2>1.0 PURPOSE:</h2>\n  <p>The purpose of this Standard Operating Procedure (SOP) is to define a structured and controlled process for the development of all software products intended for use within impact GxP-regulated processes developed at Risensun Digitization Pvt. Ltd.</p>\n\n  <h2>2.0 SCOPE:</h2>\n  <p>This SOP applies to the entire lifecycle of all software products developed by Risensun Digitization Pvt. Ltd., Hyderabad</p>\n\n  <h2>3.0 RESPONSIBILITY:</h2>\n  <ul>\n    <li>Product Owner / Business Analyst: Define and maintain User Requirements</li>\n    <li>3.1 Specification (URS) and Act as the primary liaison between business stakeholders and the development team.</li>\n    <li>3.2 Quality Assurance: Oversee the overall quality management system for software and approve the software validation process</li>\n    <li>3.3 Project Manager: Plan, execute, and monitor the software development project. Manage timelines, budget, and resources.</li>\n  </ul>\n\n  <h2>4.0 ACCOUNTABILITY:</h2>\n  <ul>\n    <li>4.1 System Owner: Overall accountability for the system's compliance, performance, and maintenance throughout its lifecycle.</li>\n    <li>4.2 Software Developers: Design, develop, and unit test software components.</li>\n    <li>4.3 Software Development Lead / Manager: Oversee the overall software development process and Resource allocation and team management.</li>\n  </ul>\n\n  <h2>5.0 DEFINITIONS:</h2>\n  <ul>\n    <li>5.1 Software Product: A complete, deliverable software system or application intended for specific use cases within the company.</li>\n    <li>5.2 SDLC (Software Development Life Cycle): A structured methodology followed in software development</li>\n  </ul>\n\n  <h2>6.0 PROCEDURE:</h2>\n  <h3>6.1 Project Initiation and Planning</h3>\n  <ul>\n    <li>6.1.1 An initial Business Case study and market survey shall be conducted to assess the viability, strategic alignment, and potential benefits.</li>\n    <li>6.1.2 High-level scope, objectives, and preliminary risks shall be identified.</li>\n    <li>6.1.3 A Project Plan shall be developed, outlining Project scope, objectives, deliverables, High-level timeline, milestones, Resource requirements, methodology, Risk management plan, validation strategy and responsibilities.</li>\n    <li>6.1.4 The Project Plan shall be reviewed and approved by the Project Manager, System Owner, and Quality.</li>\n  </ul>\n\n  <h3>6.2 Requirement Gathering</h3>\n  <ul>\n    <li>6.2.1 The Product Owner/Business Analyst, in collaboration with stakeholders shall gather detailed User Requirements</li>\n    <li>6.2.2 The User Requirements shall be clear, unambiguous, verifiable, and traceable</li>\n    <li>6.2.3 The URS shall be reviewed by the Product Owner, System Owner, and approved by QA</li>\n    <li>6.2.4 The development team, in collaboration with the Product Owner, shall translate URS into a detailed FRS, describing what the system will do to meet the user requirements.</li>\n    <li>6.2.5 The detailed descriptions of system functions, inputs, outputs, interfaces, and expected behavior shall be included in FRS.</li>\n  </ul>\n\n  <h3>6.3 Design</h3>\n  <ul>\n    <li>6.3.1 The Development Team shall create the Software Design Specification, detailing how the system will be built to satisfy the FRS.</li>\n    <li>6.3.2 This includes, System architecture, Database design, Module design and interfaces, Data flow diagrams, User interface design, Error handling mechanisms, Security design, Backup and recovery mechanisms, Audit trail design, electronic signature implementation details.</li>\n    <li>6.3.3 A detailed risk assessment of the design shall be performed, addressing potential vulnerabilities and control measures for GxP compliance.</li>\n    <li>6.3.4 The DFCS shall be reviewed by the Development Team and approved by the Development Lead, System Owner, and Quality</li>\n  </ul>\n\n  <h3>6.4 Development & Coding</h3>\n  <ul>\n    <li>6.4.1 Developers shall write code by referring documented coding standards and guidelines (e.g., naming conventions, code structure, commenting, error handling).</li>\n    <li>6.4.2 Developers shall emphasis on clean code, modularity, and maintainability.</li>\n    <li>6.4.3 Automated testing tools shall be used to identify potential defects, security vulnerabilities, and non-compliance with coding standards.</li>\n    <li>6.4.4 Developers shall perform unit testing on individual code components to ensure they function as designed.</li>\n    <li>6.4.5 All developed code shall undergo formal code review by independent developers and, by a designated reviewer. The Code review findings shall be documented, tracked, and resolved (Refer SOP No. RSD-SOP-024).</li>\n    <li>6.4.6 All source code, build scripts, and configuration files shall be maintained. The build integrity shall be maintained to ensure reproducible builds.</li>\n  </ul>\n\n  <h2>7.0 REFERENCES:</h2>\n  <ul>\n    <li>SOP on SOP: RSD-SOP-001</li>\n    <li>SOP No. RSD-SOP-024</li>\n  </ul>\n\n  <h2>8.0 ENCLOSURES:</h2>\n  <ul>\n    <li>8.1 NA</li>\n  </ul>\n\n  <h2>9.0 ABBREVIATIONS:</h2>\n  <table>\n    <tbody>\n      <tr>\n        <td>9.1 QA</td>\n        <td>: Quality Assurance</td>\n      </tr>\n      <tr>\n        <td>9.2 IT</td>\n        <td>: Information Technology</td>\n      </tr>\n      <tr>\n        <td>9.3 OEM</td>\n        <td>: Original Equipment Manufacturer</td>\n      </tr>\n      <tr>\n        <td>9.4 SOW</td>\n        <td>: Scope of Work</td>\n      </tr>\n      <tr>\n        <td>9.5 SME</td>\n        <td>: Subject Matter Expertise</td>\n      </tr>\n      <tr>\n        <td>9.6 OPC</td>\n        <td>: Open Platform Communications</td>\n      </tr>\n    </tbody>\n  </table>\n\n  <h2>10.0 REVISION HISTORY:</h2>\n  <table>\n    <thead>\n      <tr>\n        <th>Revision No</th>\n        <th>Effective Date</th>\n        <th>Changes made in Revision</th>\n      </tr>\n    </thead>\n    <tbody>\n      <tr>\n        <td>00</td>\n        <td></td>\n        <td>New Quality Standard Operating Procedure is prepared.</td>\n      </tr>\n    </tbody>\n  </table>\n\n  <table class=\"signatories-table\">\n    <tbody>\n      <tr>\n        <th></th>\n        <th>Prepared By</th>\n        <th>Reviewed By</th>\n        <th>Approved By</th>\n      </tr>\n      <tr>\n        <td>Signatories</td>\n        <td></td>\n        <td></td>\n        <td></td>\n      </tr>\n      <tr>\n        <td>Name</td>\n        <td></td>\n        <td></td>\n        <td></td>\n      </tr>\n      <tr>\n        <td>Designation</td>\n        <td></td>\n        <td></td>\n        <td></td>\n      </tr>\n      <tr>\n        <td>Signature</td>\n        <td></td>\n        <td></td>\n        <td></td>\n      </tr>\n      <tr>\n        <td>Date</td>\n        <td></td>\n        <td></td>\n        <td></td>\n      </tr>\n    </tbody>\n  </table>\n  <p>Confidential to Risensun Digitization Pvt Ltd.</p>\n  <!-- The original document includes \"Page X of Y\" which is omitted as it's a single HTML output -->\n</div>"
+            }
+            // If no html in upload response but we got template id, fetch template details to check for html
+            if (!serverHtml && uploadResp?.id) {
+              try {
+                const tpl = await documentService.getDocument(uploadResp.id);
+                serverHtml =
+                  tpl?.htmlContent ||
+                  tpl?.html ||
+                  tpl?.content ||
+                  tpl?.data?.htmlContent ||
+                  tpl?.data?.html ||
+                  tpl?.data?.data?.html ||
+                  tpl?.result?.html ||
+                  serverHtml;
+              } catch (e) {
+                console.debug('Failed to fetch template details for html', e);
+              }
+            }
+            if (serverHtml) {
+              console.debug('Received server HTML for preview');
+            } else {
+              console.debug('No server HTML returned from upload or template fetch');
             }
           } catch (uErr: any) {
-            console.warn('uploadDocx failed', uErr);
+            console.warn('document upload failed', uErr);
             // show non-blocking error but continue to attempt local parsing
             toast.error(uErr?.message || 'Failed to upload document for AI processing');
           }
@@ -662,7 +761,9 @@ export default function App() {
             fileName: file.name,
             department: workflowResult.primaryDepartment,
             fileSize: fileSizeFormatted,
-            uploadDate: uploadDateFormatted
+            uploadDate: uploadDateFormatted,
+            // include server HTML if uploaded and returned it
+            serverHtml: serverHtml
           });
           setCurrentView('ai-conversion-preview');
           
@@ -1223,6 +1324,7 @@ export default function App() {
         onFileUpload={handleFileUpload}
         onUploadSubmit={handleUploadSubmit}
         onClearSelection={handleClearSelection}
+        organizationId={currentUser?.orgId || ''}
       />
     </div>
   );
@@ -1269,6 +1371,7 @@ export default function App() {
           department={pendingConversion.department}
           fileSize={pendingConversion.fileSize}
           uploadDate={pendingConversion.uploadDate}
+          serverHtml={pendingConversion.serverHtml}
           onSave={handleConversionSave}
           onCancel={handleConversionCancel}
         />

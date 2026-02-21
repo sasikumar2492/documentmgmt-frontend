@@ -21,14 +21,18 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from './ui/
 import { Badge } from './ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
 import { TemplateData, ViewType } from '../types';
+import { documentService } from '../services/documentService';
+import DocumentEditorSimple from './DocumentEditorSimple';
 
 interface UploadTemplatesProps {
   templates: TemplateData[];
   selectedFiles: FileList | null;
   onFileUpload: (event: React.ChangeEvent<HTMLInputElement>) => void;
-  onUploadSubmit: () => void;
+  onUploadSubmit: (meta?: { name?: string; description?: string; departmentId?: string; organizationId?: string }) => void;
   onClearSelection: () => void;
   onNavigate?: (view: ViewType) => void;
+  selectedDepartment?: string;
+  onDepartmentChange?: (dept: string) => void;
 }
 
 const DEPARTMENTS = [
@@ -47,8 +51,15 @@ export const UploadTemplates: React.FC<UploadTemplatesProps> = ({
   onUploadSubmit,
   onClearSelection,
   onNavigate
+  , selectedDepartment, onDepartmentChange
 }) => {
   const safeTemplates = Array.isArray(templates) ? templates : [];
+  const [metaName, setMetaName] = useState<string>('');
+  const [metaDescription, setMetaDescription] = useState<string>('');
+  const [metaDepartmentId, setMetaDepartmentId] = useState<string>('');
+  const [metaOrganizationId, setMetaOrganizationId] = useState<string>('');
+  const [uploadingMeta, setUploadingMeta] = useState(false);
+  const [uploadedTemplate, setUploadedTemplate] = useState<any | null>(null);
   
   // Statistics for the cards
   const stats = {
@@ -219,7 +230,7 @@ export const UploadTemplates: React.FC<UploadTemplatesProps> = ({
               <Building2 className="h-4 w-4 text-slate-500" />
               Select Department <span className="text-red-500">*</span>
             </label>
-            <Select>
+            <Select value={selectedDepartment} onValueChange={(v) => onDepartmentChange && onDepartmentChange(v || '')}>
               <SelectTrigger className="w-full h-12 bg-white border-slate-200 hover:border-blue-400 focus:ring-2 focus:ring-blue-500/20 text-base rounded-xl font-medium">
                 <SelectValue placeholder="Choose department..." />
               </SelectTrigger>
@@ -238,11 +249,42 @@ export const UploadTemplates: React.FC<UploadTemplatesProps> = ({
               Required: Select the department for this template
             </p>
           </div>
+          
+          {/* Organization ID (mandatory) */}
+          <div className="max-w-md">
+            <label className="text-sm text-slate-700 font-bold mb-3 flex items-center gap-2 uppercase tracking-tight">
+              <Building2 className="h-4 w-4 text-slate-500" />
+              Organization ID <span className="text-red-500">*</span>
+            </label>
+            <input id="main-organization-id" className="w-full h-12 p-2 border rounded-xl" placeholder="Organization ID (required)" />
+            <p className="text-[11px] text-slate-400 mt-2 font-medium italic">
+              Required for template upload
+            </p>
+          </div>
 
           {/* Action Buttons */}
           <div className="flex gap-4 pt-4">
             <Button
-              onClick={onUploadSubmit}
+              onClick={() => {
+                // collect required metadata and forward to parent
+                const orgInput = (document.getElementById('main-organization-id') as HTMLInputElement)?.value || '';
+                const nameInput = (document.querySelector('#template-upload') as HTMLInputElement)?.files?.[0]?.name || '';
+                if (!selectedFiles || selectedFiles.length === 0) return;
+                if (!selectedDepartment) {
+                  alert('Please select department');
+                  return;
+                }
+                if (!orgInput) {
+                  alert('Organization ID is required');
+                  return;
+                }
+                onUploadSubmit({
+                  name: nameInput,
+                  description: '',
+                  departmentId: selectedDepartment,
+                  organizationId: orgInput
+                });
+              }}
               disabled={!selectedFiles || selectedFiles.length === 0}
               className="px-8 h-12 bg-gradient-to-r from-blue-600 to-indigo-600 text-white hover:from-blue-700 hover:to-indigo-700 shadow-lg shadow-blue-200 transition-all disabled:opacity-50 disabled:cursor-not-allowed font-bold rounded-xl active:scale-95"
             >
@@ -258,6 +300,82 @@ export const UploadTemplates: React.FC<UploadTemplatesProps> = ({
               Clear Selection
             </Button>
           </div>
+        </CardContent>
+      </Card>
+      
+      {/* Quick Upload + Edit (with metadata) */}
+      <Card className="mb-6 bg-white border border-slate-200 shadow-sm rounded-2xl overflow-hidden">
+        <CardHeader className="border-b border-slate-50 px-8 py-6">
+          <CardTitle className="text-lg text-slate-800 flex items-center gap-2">
+            <FilePlus className="h-5 w-5 text-blue-600" />
+            Upload & Edit (with metadata)
+          </CardTitle>
+          <CardDescription className="text-slate-500">
+            Upload a Word document and open it in the editor. Provide optional metadata.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="p-8 space-y-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <div>
+                <label className="text-sm font-medium mb-2 block">Select File</label>
+                <input type="file" accept=".doc,.docx" onChange={onFileUpload} />
+              </div>
+              <div>
+                <label className="text-sm font-medium mb-2 block">Name</label>
+                <input value={metaName} onChange={(e) => setMetaName(e.target.value)} placeholder="Document name (optional, not sent)" className="w-full p-2 border rounded"/>
+              </div>
+              <div>
+                <label className="text-sm font-medium mb-2 block">Department ID</label>
+                <input value={metaDepartmentId} onChange={(e) => setMetaDepartmentId(e.target.value)} placeholder="Department ID (optional, not sent)" className="w-full p-2 border rounded"/>
+              </div>
+              <div>
+                <label className="text-sm font-medium mb-2 block">Organization ID</label>
+                <input value={metaOrganizationId} onChange={(e) => setMetaOrganizationId(e.target.value)} placeholder="Organization ID (optional, not sent)" className="w-full p-2 border rounded"/>
+              </div>
+              <div className="md:col-span-2">
+                <label className="text-sm font-medium mb-2 block">Description</label>
+                <textarea value={metaDescription} onChange={(e) => setMetaDescription(e.target.value)} placeholder="Description (optional, not sent)" className="w-full p-2 border rounded"/>
+              </div>
+            </div>
+            <div className="flex items-center gap-3">
+            <Button
+              onClick={async () => {
+                if (!selectedFiles || selectedFiles.length === 0) return;
+                const file = selectedFiles[0];
+                setUploadingMeta(true);
+                try {
+                  // Send file plus metadata fields (name, description, departmentId, organizationId)
+                  const resp = await documentService.uploadDocument(file, {
+                    name: metaName || file.name,
+                    description: metaDescription,
+                    departmentId: metaDepartmentId,
+                    organizationId: metaOrganizationId
+                  });
+                  setUploadedTemplate(resp);
+                } catch (err) {
+                  console.error('Upload failed', err);
+                } finally {
+                  setUploadingMeta(false);
+                }
+              }}
+              className="bg-blue-600 text-white px-4 py-2 rounded"
+              disabled={!selectedFiles || selectedFiles.length === 0 || uploadingMeta}
+            >
+              {uploadingMeta ? 'Uploading...' : 'Upload & Open Editor'}
+            </Button>
+            </div>
+
+            <div id="uploaded-editor" className="mt-4">
+              {uploadedTemplate ? (
+                <DocumentEditorSimple
+                  documentId={uploadedTemplate?.id || uploadedTemplate?.documentId}
+                  initialHtml={uploadedTemplate?.htmlContent || uploadedTemplate?.html}
+                  onSaved={() => {
+                    // optionally refresh list or show toast; keep minimal to avoid design changes
+                  }}
+                />
+              ) : null}
+            </div>
         </CardContent>
       </Card>
     </div>
