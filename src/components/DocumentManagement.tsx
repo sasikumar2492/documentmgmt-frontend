@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from './ui/card';
 import { Button } from './ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
@@ -15,6 +15,8 @@ import {
   Wand2
 } from 'lucide-react';
 import { ViewType, ReportData, TemplateData } from '../types';
+import { apiClient } from '../api/axios';
+import { tokenStorage } from '../utils/tokenStorage';
 import { DynamicFormViewer } from './DynamicFormViewer';
 import { FormPages } from './FormPages';
 
@@ -25,8 +27,9 @@ interface DocumentManagementProps {
   onViewDocument?: (documentId: string) => void;
   selectedFiles?: FileList | null;
   onFileUpload?: (event: React.ChangeEvent<HTMLInputElement>) => void;
-  onUploadSubmit?: () => void;
+  onUploadSubmit?: (meta?: { name?: string; description?: string; departmentId?: string; organizationId?: string }) => void;
   onClearSelection?: () => void;
+  organizationId?: string;
 }
 
 export const DocumentManagement: React.FC<DocumentManagementProps> = ({
@@ -38,14 +41,46 @@ export const DocumentManagement: React.FC<DocumentManagementProps> = ({
   onFileUpload,
   onUploadSubmit,
   onClearSelection
- 
+  ,
+  organizationId
 }) => {
+  const [localDept, setLocalDept] = useState<string>('');
+  const [localDescription, setLocalDescription] = useState<string>('');
+  const [departments, setDepartments] = useState<Array<{ id: string; name: string }>>([]);
+  const [loadingDepts, setLoadingDepts] = useState(false);
   const [selectedTemplate, setSelectedTemplate] = useState<TemplateData | null>(null);
   const [selectedReport, setSelectedReport] = useState<ReportData | null>(null);
   const [currentPage, setCurrentPage] = useState(1);
 
   const safeReports = Array.isArray(reports) ? reports : [];
   const safeTemplates = Array.isArray(templates) ? templates : [];
+
+  useEffect(() => {
+    let mounted = true;
+    const token = tokenStorage.getAccessToken();
+    // Don't attempt fetch if no auth yet; wait until user signs in (App passes organizationId after login)
+    if (!token && !organizationId) {
+      setDepartments([]);
+      return;
+    }
+
+    (async () => {
+      setLoadingDepts(true);
+      try {
+        const resp = await apiClient.get('/identity/departments');
+        const data = resp.data || resp.data?.data || [];
+        if (!mounted) return;
+        const mapped = Array.isArray(data) ? data.map((d: any) => ({ id: d.id, name: d.name })) : [];
+        setDepartments(mapped);
+      } catch (err) {
+        console.warn('Failed to load departments', err);
+        setDepartments([]);
+      } finally {
+        if (mounted) setLoadingDepts(false);
+      }
+    })();
+    return () => { mounted = false; };
+  }, [organizationId]);
 
   const handleDelete = (docId: string, docName: string) => {
     // Show confirmation and handle delete
@@ -115,12 +150,18 @@ export const DocumentManagement: React.FC<DocumentManagementProps> = ({
 
   // If a report is selected, show the form pages
   if (selectedReport) {
+    const formData = (selectedReport.formData as any) || {};
     return (
       <FormPages
-        report={selectedReport}
         currentPage={currentPage}
-        setCurrentPage={setCurrentPage}
-        onClose={handleCloseReportView}
+        formData={formData}
+        onFormDataChange={() => {}}
+        onSave={() => {}}
+        onReset={() => {}}
+        onSubmit={() => {}}
+        onApprove={() => {}}
+        onCancel={() => { setSelectedReport(null); setCurrentPage(1); }}
+        setCurrentPage={(p: number) => setCurrentPage(p)}
       />
     );
   }
@@ -292,47 +333,62 @@ export const DocumentManagement: React.FC<DocumentManagementProps> = ({
                 <Building2 className="h-4 w-4 text-slate-600" />
                 Select Department <span className="text-red-500">*</span>
               </label>
-              <Select>
+              <Select value={localDept} onValueChange={(v) => setLocalDept(v || '')}>
                 <SelectTrigger className="w-full h-12 bg-white border-slate-200 hover:border-blue-400 focus:ring-2 focus:ring-blue-500/20 text-base rounded-xl font-medium transition-all">
                   <SelectValue placeholder="Choose department..." />
                 </SelectTrigger>
                 <SelectContent className="rounded-xl shadow-xl border-slate-100">
-                  <SelectItem value="engineering">
-                    <div className="flex items-center gap-2">
-                      <Building2 className="h-4 w-4 text-blue-600" />
-                      <span>Engineering</span>
-                    </div>
-                  </SelectItem>
-                  <SelectItem value="manufacturing">
-                    <div className="flex items-center gap-2">
-                      <Building2 className="h-4 w-4 text-blue-600" />
-                      <span>Manufacturing</span>
-                    </div>
-                  </SelectItem>
-                  <SelectItem value="quality">
-                    <div className="flex items-center gap-2">
-                      <Building2 className="h-4 w-4 text-blue-600" />
-                      <span>Quality Assurance</span>
-                    </div>
-                  </SelectItem>
-                  <SelectItem value="procurement">
-                    <div className="flex items-center gap-2">
-                      <Building2 className="h-4 w-4 text-blue-600" />
-                      <span>Procurement</span>
-                    </div>
-                  </SelectItem>
-                  <SelectItem value="operations">
-                    <div className="flex items-center gap-2">
-                      <Building2 className="h-4 w-4 text-blue-600" />
-                      <span>Operations</span>
-                    </div>
-                  </SelectItem>
-                  <SelectItem value="research">
-                    <div className="flex items-center gap-2">
-                      <Building2 className="h-4 w-4 text-blue-600" />
-                      <span>Research & Development</span>
-                    </div>
-                  </SelectItem>
+                  {loadingDepts ? (
+                    <div className="p-3 text-sm text-slate-500">Loading departments...</div>
+                  ) : departments.length > 0 ? (
+                    departments.map((d) => (
+                      <SelectItem key={d.id} value={d.id} className="py-3">
+                        <div className="flex items-center gap-2">
+                          <Building2 className="h-4 w-4 text-blue-600" />
+                          <span>{d.name}</span>
+                        </div>
+                      </SelectItem>
+                    ))
+                  ) : (
+                    <>
+                      <SelectItem value="engineering">
+                        <div className="flex items-center gap-2">
+                          <Building2 className="h-4 w-4 text-blue-600" />
+                          <span>Engineering</span>
+                        </div>
+                      </SelectItem>
+                      <SelectItem value="manufacturing">
+                        <div className="flex items-center gap-2">
+                          <Building2 className="h-4 w-4 text-blue-600" />
+                          <span>Manufacturing</span>
+                        </div>
+                      </SelectItem>
+                      <SelectItem value="quality">
+                        <div className="flex items-center gap-2">
+                          <Building2 className="h-4 w-4 text-blue-600" />
+                          <span>Quality Assurance</span>
+                        </div>
+                      </SelectItem>
+                      <SelectItem value="procurement">
+                        <div className="flex items-center gap-2">
+                          <Building2 className="h-4 w-4 text-blue-600" />
+                          <span>Procurement</span>
+                        </div>
+                      </SelectItem>
+                      <SelectItem value="operations">
+                        <div className="flex items-center gap-2">
+                          <Building2 className="h-4 w-4 text-blue-600" />
+                          <span>Operations</span>
+                        </div>
+                      </SelectItem>
+                      <SelectItem value="research">
+                        <div className="flex items-center gap-2">
+                          <Building2 className="h-4 w-4 text-blue-600" />
+                          <span>Research & Development</span>
+                        </div>
+                      </SelectItem>
+                    </>
+                  )}
                 </SelectContent>
               </Select>
               <p className="text-xs text-slate-500 mt-1">
@@ -340,10 +396,31 @@ export const DocumentManagement: React.FC<DocumentManagementProps> = ({
               </p>
             </div>
 
+            {/* Optional Description */}
+            <div>
+              <label className="text-sm text-slate-600 font-medium mb-2 block">Description (optional)</label>
+              <input value={localDescription} onChange={(e) => setLocalDescription(e.target.value)} placeholder="Description" className="w-full h-12 p-2 border rounded-lg" />
+            </div>
             {/* Action Buttons */}
             <div className="flex gap-4 pt-4">
               <Button
-                onClick={onUploadSubmit}
+                onClick={() => {
+                  if (!selectedFiles || selectedFiles.length === 0) return;
+                if (!localDept) {
+                  alert('Please select department');
+                  return;
+                }
+                if (!organizationId) {
+                  alert('Organization ID is required (from current user)');
+                  return;
+                }
+                onUploadSubmit && onUploadSubmit({
+                  name: (selectedFiles[0] && selectedFiles[0].name) || 'Uploaded Template',
+                  description: localDescription,
+                  departmentId: localDept,
+                  organizationId: organizationId
+                });
+                }}
                 disabled={!selectedFiles || selectedFiles.length === 0}
                 className="px-8 h-12 bg-gradient-to-r from-blue-600 to-indigo-600 text-white hover:from-blue-700 hover:to-indigo-700 shadow-lg shadow-blue-200 transition-all disabled:opacity-50 disabled:cursor-not-allowed font-bold rounded-xl active:scale-95"
               >

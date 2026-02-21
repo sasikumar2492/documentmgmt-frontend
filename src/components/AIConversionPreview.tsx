@@ -139,7 +139,6 @@ export const AIConversionPreview: React.FC<AIConversionPreviewProps> = ({
   const [editingFieldId, setEditingFieldId] = useState<string | null>(null);
   const [currentPage, setCurrentPage] = useState(0);
   const [isAddFieldDialogOpen, setIsAddFieldDialogOpen] = useState(false);
-  const [showOriginal, setShowOriginal] = useState(false);
   const [selectedPageForAddField, setSelectedPageForAddField] = useState(0);
   const [fileNameState, setFileNameState] = useState(fileName);
   const [departmentState, setDepartmentState] = useState(department);
@@ -154,6 +153,28 @@ export const AIConversionPreview: React.FC<AIConversionPreviewProps> = ({
     required: false,
     placeholder: ''
   });
+ 
+  // Update a field's value inside sections
+  const updateFieldValue = (pageIndex: number, fieldId: string, value: string) => {
+    const updated = sections.map((s, idx) => {
+      if (idx !== pageIndex) return s;
+      return {
+        ...s,
+        fields: s.fields.map(f => f.id === fieldId ? { ...f, value } : f)
+      };
+    });
+    setSections(updated);
+  };
+
+  const updateSectionHeader = (pageIndex: number, header: string) => {
+    const updated = sections.map((s, idx) => idx === pageIndex ? { ...s, header } : s);
+    setSections(updated);
+  };
+
+  const updateSectionFooter = (pageIndex: number, footer: string) => {
+    const updated = sections.map((s, idx) => idx === pageIndex ? { ...s, footer } : s);
+    setSections(updated);
+  };
 
   const totalPages = sections.length;
   const currentSection = sections[currentPage];
@@ -209,7 +230,16 @@ export const AIConversionPreview: React.FC<AIConversionPreviewProps> = ({
     return (
       <div className={`relative group ${field.type === 'image' ? 'col-span-2' : ''}`}>
         {field.type === 'textarea' ? (
-          <Textarea className={`${commonClasses} min-h-[80px]`} disabled readOnly value={field.value || ''} placeholder={field.placeholder} />
+          // editable only if custom field
+          isCustom ? (
+            <Textarea
+              className={`${commonClasses} min-h-[80px]`}
+              value={field.value || ''}
+              onChange={(e) => updateFieldValue(currentPage, field.id, e.target.value)}
+            />
+          ) : (
+            <Textarea className={`${commonClasses} min-h-[80px]`} disabled readOnly value={field.value || ''} placeholder={field.placeholder} />
+          )
         ) : field.type === 'checkbox' ? (
           <div className="flex items-center gap-2 p-3 bg-slate-50 rounded border border-slate-300">
             <Checkbox checked={!!field.value} disabled />
@@ -235,7 +265,18 @@ export const AIConversionPreview: React.FC<AIConversionPreviewProps> = ({
             </div>
           </div>
         ) : (
-          <Input type={field.type === 'number' ? 'number' : 'text'} className={commonClasses} disabled readOnly value={field.value || ''} placeholder={field.placeholder} />
+          // If this is a custom field, allow editing its value inline
+          isCustom ? (
+            <Input
+              type={field.type === 'number' ? 'number' : 'text'}
+              className={commonClasses}
+              value={field.value || ''}
+              placeholder={field.placeholder}
+              onChange={(e) => updateFieldValue(currentPage, field.id, e.target.value)}
+            />
+          ) : (
+            <Input type={field.type === 'number' ? 'number' : 'text'} className={commonClasses} disabled readOnly value={field.value || ''} placeholder={field.placeholder} />
+          )
         )}
         
         {isCustom && (
@@ -248,6 +289,15 @@ export const AIConversionPreview: React.FC<AIConversionPreviewProps> = ({
             <X className="h-3 w-3" />
           </Button>
         )}
+        {/* Add sibling custom field (opens add dialog for current page) */}
+        <Button
+          size="sm"
+          variant="ghost"
+          className="absolute -top-2 -left-2 opacity-0 group-hover:opacity-100 transition-opacity bg-white border border-slate-200 text-slate-600 hover:text-slate-800 hover:bg-slate-50 rounded-full h-6 w-6 p-0 shadow-sm"
+          onClick={() => { setSelectedPageForAddField(currentPage); setIsAddFieldDialogOpen(true); }}
+        >
+          <Plus className="h-3 w-3" />
+        </Button>
       </div>
     );
   };
@@ -262,38 +312,36 @@ export const AIConversionPreview: React.FC<AIConversionPreviewProps> = ({
           </div>
           <div>
             <h1 className="text-2xl font-bold text-slate-900">AI Conversion Preview</h1>
-            <p className="text-slate-500 flex items-center gap-2">
-              <Sparkles className="h-4 w-4 text-amber-500" />
-              Intelligence layer successfully mapped {sections.reduce((a, s) => a + s.fields.length, 0)} fields
-            </p>
+            <div className="flex items-center gap-4">
+              <p className="text-slate-500 flex items-center gap-2">
+                <Sparkles className="h-4 w-4 text-amber-500" />
+                Intelligence layer successfully mapped {sections.reduce((a, s) => a + s.fields.length, 0)} fields
+              </p>
+              <div className="text-sm text-slate-500 font-medium ml-4">
+                Page <span className="font-bold text-slate-800">{currentPage + 1}</span> of <span className="font-bold text-slate-800">{totalPages}</span>
+              </div>
+            </div>
           </div>
         </div>
-        <div className="flex items-center gap-3">
-          <div className="flex bg-slate-200 p-1 rounded-lg mr-2">
-            <Button 
-              variant={!showOriginal ? "default" : "ghost"} 
-              size="sm" 
-              onClick={() => setShowOriginal(false)}
-              className={!showOriginal ? "bg-white text-blue-600 shadow-sm hover:bg-white" : "text-slate-600 hover:bg-slate-300"}
-            >
-              <Zap className="h-4 w-4 mr-2" />
-              UI Form
-            </Button>
-            <Button 
-              variant={showOriginal ? "default" : "ghost"} 
-              size="sm" 
-              onClick={() => setShowOriginal(true)}
-              className={showOriginal ? "bg-white text-blue-600 shadow-sm hover:bg-white" : "text-slate-600 hover:bg-slate-300"}
-            >
-              <FileText className="h-4 w-4 mr-2" />
-              Original Doc
-            </Button>
-          </div>
-          <Button variant="outline" onClick={onCancel} className="border-slate-300 text-slate-600 hover:bg-slate-100">Cancel</Button>
-          <Button onClick={handleSaveAll} className="bg-blue-600 hover:bg-blue-700 text-white shadow-md shadow-blue-200">
+          <div className="flex items-center gap-3">
+            <Button variant="outline" onClick={onCancel} className="border-slate-300 text-slate-600 hover:bg-slate-100">Cancel</Button>
+            <Button onClick={handleSaveAll} className="bg-blue-600 hover:bg-blue-700 text-white shadow-md shadow-blue-200">
             <Save className="h-4 w-4 mr-2" />
             Save Template
           </Button>
+          </div>
+        </div>
+
+      {/* Document file name moved to top (configuration section commented out below) */}
+      <div className="mb-4 max-w-3xl">
+        <Label className="text-xs font-black uppercase tracking-widest text-slate-500">Document File Name</Label>
+        <div className="relative mt-2">
+          <Input
+            value={fileNameState}
+            onChange={(e) => setFileNameState(e.target.value)}
+            className="pl-10 h-12 border-slate-300 focus:ring-blue-500 text-slate-900 font-bold bg-white"
+          />
+          <FileText className="absolute left-3.5 top-1/2 -translate-y-1/2 h-5 w-5 text-slate-400" />
         </div>
       </div>
 
@@ -308,204 +356,129 @@ export const AIConversionPreview: React.FC<AIConversionPreviewProps> = ({
               </h3>
               <p className="text-xs text-slate-400 mt-1">Server-generated HTML preview — backend is responsible for sanitization.</p>
             </div>
-            <div className="p-6 prose max-w-full text-slate-800" dangerouslySetInnerHTML={{ __html: serverHtml }} />
+            <div className="p-6 prose max-w-full text-slate-800">
+              <style>{`
+                /* Ensure tables from server HTML have visible borders and spacing */
+                .ai-server-html table { border: 1px solid #e2e8f0; border-collapse: collapse; width: 100%; }
+                .ai-server-html table th, .ai-server-html table td { border: 1px solid #e2e8f0; padding: 8px; text-align: left; vertical-align: top; }
+              `}</style>
+              <div className="ai-server-html" dangerouslySetInnerHTML={{ __html: serverHtml as string }} />
+            </div>
           </div>
         </div>
       )}
 
-      {/* Configuration Section - Document File Name Only */}
-      <div className="max-w-md space-y-3">
-        <Label className="text-xs font-black uppercase tracking-widest text-slate-500">Document File Name</Label>
-        <div className="relative">
-          <Input 
-            value={fileNameState}
-            onChange={(e) => setFileNameState(e.target.value)}
-            className="pl-10 h-12 border-slate-300 focus:ring-blue-500 text-slate-900 font-bold bg-white"
-          />
-          <FileText className="absolute left-3.5 top-1/2 -translate-y-1/2 h-5 w-5 text-slate-400" />
+      {false && (
+        /* Configuration Section - Document File Name Only (commented out) */
+        <div className="max-w-md space-y-3">
+          <Label className="text-xs font-black uppercase tracking-widest text-slate-500">Document File Name</Label>
+          <div className="relative">
+            <Input 
+              value={fileNameState}
+              onChange={(e) => setFileNameState(e.target.value)}
+              className="pl-10 h-12 border-slate-300 focus:ring-blue-500 text-slate-900 font-bold bg-white"
+            />
+            <FileText className="absolute left-3.5 top-1/2 -translate-y-1/2 h-5 w-5 text-slate-400" />
+          </div>
+          {/* Document Header */}
+          <div className="pt-3">
+            <Label className="text-xs font-black uppercase tracking-widest text-slate-500">Document Header</Label>
+            <Textarea
+              value={currentSection?.header || ''}
+              onChange={(e) => updateSectionHeader(currentPage, e.target.value)}
+              placeholder="Header content for this page"
+              className="w-full min-h-[80px] p-2"
+            />
+          </div>
+
+          {/* Document Footer */}
+          <div className="pt-3">
+            <Label className="text-xs font-black uppercase tracking-widest text-slate-500">Document Footer</Label>
+            <Textarea
+              value={currentSection?.footer || ''}
+              onChange={(e) => updateSectionFooter(currentPage, e.target.value)}
+              placeholder="Footer content for this page"
+              className="w-full min-h-[60px] p-2"
+            />
+          </div>
         </div>
-      </div>
+      )}
 
       {/* Editor Content */}
       <div className="grid grid-cols-12 gap-8 items-start">
-        {/* Page Selector Sidebar */}
-        <div className="col-span-3 space-y-4 sticky top-6">
-          <h3 className="text-xs font-black uppercase tracking-[0.2em] text-slate-400 mb-4 px-2">Page Structure</h3>
-          <div className="space-y-2">
-            {sections.map((section, idx) => (
-              <button
-                key={idx}
-                onClick={() => setCurrentPage(idx)}
-                className={`w-full text-left p-4 rounded-xl border-2 transition-all flex items-center justify-between group ${
-                  currentPage === idx 
-                    ? 'border-blue-600 bg-blue-50/50 shadow-sm' 
-                    : 'border-transparent bg-white hover:bg-slate-100 text-slate-600'
-                }`}
-              >
-                <div className="flex items-center gap-3">
-                  <div className={`w-8 h-8 rounded-lg flex items-center justify-center font-bold text-sm ${
-                    currentPage === idx ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-500'
-                  }`}>
-                    {idx + 1}
-                  </div>
-                  <div className="overflow-hidden">
-                    <p className={`text-sm font-bold truncate ${currentPage === idx ? 'text-blue-700' : 'text-slate-700'}`}>
-                      {section.title || `Page ${idx + 1}`}
-                    </p>
-                    <p className="text-[10px] text-slate-400">{section.fields.length} Fields</p>
-                  </div>
-                </div>
-                {currentPage === idx && <ChevronRight className="h-4 w-4 text-blue-600" />}
-              </button>
-            ))}
-          </div>
-        </div>
 
-        {/* Main Editor Page */}
-        <div className="col-span-9">
-          <Card className="border-slate-300 shadow-xl overflow-hidden bg-white min-h-[800px] flex flex-col">
-            <div className="h-2 bg-blue-600"></div>
-            
-            {showOriginal ? (
-              <div className="flex-1 bg-slate-100 p-8 flex justify-center items-start overflow-auto">
-                {/* Simulated Original Document Image */}
-                <div className="w-full max-w-[800px] bg-white shadow-2xl border border-slate-300 p-12 min-h-[1000px] relative">
-                  {/* Watermark */}
-                  <div className="absolute inset-0 flex items-center justify-center opacity-[0.03] pointer-events-none select-none rotate-45">
-                    <span className="text-9xl font-black text-slate-900">ORIGINAL</span>
-                  </div>
-
-                  {/* Header */}
-                  <div className="flex justify-between border-b-2 border-slate-900 pb-4 mb-8">
-                    <div className="space-y-1">
-                      <div className="w-48 h-12 bg-slate-200 mb-2"></div>
-                      <p className="text-[10px] font-bold uppercase text-slate-500">Document ID: REF-{Math.floor(Math.random() * 10000)}</p>
-                    </div>
-                    <div className="text-right space-y-1">
-                      <h3 className="text-lg font-black uppercase tracking-tighter text-slate-900">Approval Template</h3>
-                      <p className="text-[10px] font-medium text-slate-500">Rev: 04 | Page {currentPage + 1}</p>
-                    </div>
-                  </div>
-
-                  {/* Content Area */}
-                  <div className="space-y-12">
-                    {/* Visual representation of the section */}
-                    <div className="space-y-4">
-                      <div className="flex items-center gap-4">
-                        <div className="w-4 h-4 bg-slate-900"></div>
-                        <h2 className="text-xl font-black uppercase border-b border-slate-200 flex-1 pb-1">{currentSection.title}</h2>
-                      </div>
-                      
-                      {/* Form Lines Simulation */}
-                      <div className="grid grid-cols-2 gap-x-12 gap-y-10 py-6">
-                        {currentSection.fields.map((field, idx) => (
-                          <div key={idx} className={`relative ${field.type === 'image' ? 'col-span-2' : ''}`}>
-                            {field.type === 'image' ? (
-                              <div className="border border-slate-200 p-2 bg-slate-50 relative group my-4">
-                                <div className="aspect-video bg-white overflow-hidden">
-                                  <ImageWithFallback 
-                                    src={field.value} 
-                                    alt="Original Asset" 
-                                    className="w-full h-full object-contain grayscale contrast-125 opacity-80"
-                                  />
-                                </div>
-                                <div className="mt-2 text-[9px] font-mono text-slate-400 uppercase tracking-widest">{field.label}</div>
-                                <div className="absolute inset-0 border-2 border-blue-400 opacity-20 pointer-events-none"></div>
-                              </div>
-                            ) : (
-                              <>
-                                <div className="flex justify-between items-baseline mb-1">
-                                  <span className="text-[11px] font-bold text-slate-700 uppercase">{field.label}:</span>
-                                  {field.value && <span className="text-[11px] font-mono text-blue-600 bg-blue-50 px-1">{field.value}</span>}
-                                </div>
-                                <div className="h-[1px] bg-slate-300 w-full"></div>
-                              </>
-                            )}
-                            
-                            {/* AI Extraction Marker */}
-                            <div className="absolute -left-6 top-0 flex items-center h-full">
-                              <div className="w-4 h-4 rounded-full bg-blue-100 border border-blue-300 flex items-center justify-center animate-pulse">
-                                <div className="w-1.5 h-1.5 rounded-full bg-blue-500"></div>
-                              </div>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-
-                    {/* Long Text Areas Simulation */}
-                    <div className="space-y-2">
-                      <div className="w-1/3 h-3 bg-slate-100 mb-4"></div>
-                      <div className="space-y-1">
-                        <div className="w-full h-2 bg-slate-50"></div>
-                        <div className="w-full h-2 bg-slate-50"></div>
-                        <div className="w-4/5 h-2 bg-slate-50"></div>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Footer */}
-                  <div className="absolute bottom-12 left-12 right-12 border-t border-slate-200 pt-4 flex justify-between text-[8px] font-mono text-slate-400">
-                    <div>CONTROLLED DOCUMENT - DO NOT REDISTRIBUTE</div>
-                    <div>CONFIDENTIAL • {new Date().getFullYear()}</div>
-                  </div>
+        {false && (
+        <div className="col-span-9 space-y-6">
+          <Card className="border-slate-300 shadow-md overflow-hidden bg-white">
+            <div className="px-4 py-3 border-b border-slate-100 flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <FileText className="h-4 w-4 text-slate-600" />
+                <div>
+                  <div className="text-sm font-bold text-slate-800">{fileNameState}</div>
+                  <div className="text-xs text-slate-400">Page {currentPage + 1} of {totalPages}</div>
                 </div>
               </div>
-            ) : (
-              <div className="p-10 flex-1 space-y-10">
-                {/* Header Visualizer */}
-                {currentSection.header && (
-                  <div className="bg-slate-50 border border-slate-200 rounded-lg p-6 relative group border-dashed">
-                    <Badge className="absolute -top-3 left-4 bg-slate-900 text-white border-none text-[9px] uppercase tracking-widest px-2">Document Header</Badge>
-                    <pre className="text-xs text-slate-500 font-mono whitespace-pre-wrap leading-relaxed">{currentSection.header}</pre>
+              <div className="flex items-center gap-2">
+                <button onClick={handlePreviousPage} disabled={currentPage === 0} className="px-3 py-1 rounded bg-slate-100 hover:bg-slate-200 disabled:opacity-40">Prev</button>
+                <button onClick={handleNextPage} disabled={currentPage === totalPages - 1} className="px-3 py-1 rounded bg-slate-100 hover:bg-slate-200 disabled:opacity-40">Next</button>
+              </div>
+            </div>
+            <div className="p-4">
+              <div className="w-full bg-white border border-slate-200 rounded-lg overflow-auto max-h-[420px]">
+                {serverHtml ? (
+                  <div className="p-4 prose max-w-full text-slate-800">
+                    <style>{`
+                      .ai-server-html-preview table { border: 1px solid #e2e8f0; border-collapse: collapse; width: 100%; }
+                      .ai-server-html-preview table th, .ai-server-html-preview table td { border: 1px solid #e2e8f0; padding: 6px; text-align: left; vertical-align: top; }
+                    `}</style>
+                    <div className="ai-server-html-preview" dangerouslySetInnerHTML={{ __html: serverHtml as string }} />
                   </div>
-                )}
-
-                {/* Title Section */}
-                <div className="border-b border-slate-100 pb-6 flex items-center justify-between">
-                  <div>
-                    <h2 className="text-2xl font-black text-slate-900 uppercase tracking-tight">{currentSection.title || `Section ${currentPage + 1}`}</h2>
-                    <p className="text-slate-400 text-sm mt-1 italic">Extracted from original document mapping</p>
-                  </div>
-                  <Button 
-                    onClick={() => handleAddFieldClick(currentPage)}
-                    variant="outline" 
-                    size="sm" 
-                    className="bg-blue-50 border-blue-200 text-blue-600 hover:bg-blue-100 font-bold px-4"
-                  >
-                    <Plus className="h-4 w-4 mr-2" />
-                    Add Custom Field
-                  </Button>
-                </div>
-
-                {/* Fields Grid */}
-                <div className="grid grid-cols-2 gap-x-12 gap-y-8">
-                  {currentSection.fields.map((field) => (
-                    <div key={field.id} className={`space-y-2 ${field.type === 'image' ? 'col-span-2' : ''}`}>
-                      <div className="flex items-center justify-between">
-                        <Label className="text-[11px] font-black uppercase tracking-wider text-slate-500 flex items-center gap-1.5">
-                          {field.label}
-                          {field.required && <span className="text-red-500">*</span>}
-                        </Label>
-                        <span className="text-[9px] font-bold text-slate-300 bg-slate-50 px-1.5 py-0.5 rounded border border-slate-100">{field.type}</span>
-                      </div>
-                      {renderField(field)}
-                    </div>
-                  ))}
-                </div>
-
-                {/* Footer Visualizer */}
-                {currentSection.footer && (
-                  <div className="bg-slate-50 border border-slate-200 rounded-lg p-6 relative mt-auto border-dashed">
-                    <Badge className="absolute -top-3 left-4 bg-slate-900 text-white border-none text-[9px] uppercase tracking-widest px-2">Document Footer</Badge>
-                    <pre className="text-xs text-slate-500 font-mono whitespace-pre-wrap leading-relaxed">{currentSection.footer}</pre>
-                  </div>
+                ) : (
+                  <div className="p-6 text-slate-600">No original HTML available</div>
                 )}
               </div>
-            )}
-            
-            {/* Page Footer */}
-            <div className="bg-slate-50 border-t border-slate-100 px-10 py-4 flex justify-between items-center text-[10px] font-black uppercase tracking-widest text-slate-400">
+            </div>
+          </Card>
+
+          <Card className="border-slate-300 shadow-xl overflow-hidden bg-white">
+            <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between">
+              <div>
+                <h3 className="text-lg font-bold text-slate-900">{currentSection.title || `Page ${currentPage + 1}`}</h3>
+                <p className="text-xs text-slate-400 mt-1">Extracted fields — edit or add custom fields below</p>
+              </div>
+              <Button onClick={() => handleAddFieldClick(currentPage)} variant="outline" size="sm" className="bg-blue-50 border-blue-200 text-blue-600 hover:bg-blue-100 font-bold px-4">
+                <Plus className="h-4 w-4 mr-2" /> Add Custom Field
+              </Button>
+            </div>
+            <div className="p-6">
+              {currentSection.header && (
+                <div className="bg-slate-50 border border-slate-200 rounded-lg p-4 relative group border-dashed mb-4">
+                  <Badge className="absolute -top-3 left-4 bg-slate-900 text-white border-none text-[9px] uppercase tracking-widest px-2">Document Header</Badge>
+                  <pre className="text-xs text-slate-500 font-mono whitespace-pre-wrap leading-relaxed">{currentSection.header}</pre>
+                </div>
+              )}
+              <div className="grid grid-cols-2 gap-x-8 gap-y-6">
+                {currentSection.fields.map((field) => (
+                  <div key={field.id} className={`space-y-2 ${field.type === 'image' ? 'col-span-2' : ''}`}>
+                    <div className="flex items-center justify-between">
+                      <Label className="text-[11px] font-black uppercase tracking-wider text-slate-500 flex items-center gap-1.5">
+                        {field.label}
+                        {field.required && <span className="text-red-500">*</span>}
+                      </Label>
+                      <span className="text-[9px] font-bold text-slate-300 bg-slate-50 px-1.5 py-0.5 rounded border border-slate-100">{field.type}</span>
+                    </div>
+                    {renderField(field)}
+                  </div>
+                ))}
+              </div>
+              {currentSection.footer && (
+                <div className="bg-slate-50 border border-slate-200 rounded-lg p-4 mt-6 relative border-dashed">
+                  <Badge className="absolute -top-3 left-4 bg-slate-900 text-white border-none text-[9px] uppercase tracking-widest px-2">Document Footer</Badge>
+                  <pre className="text-xs text-slate-500 font-mono whitespace-pre-wrap leading-relaxed">{currentSection.footer}</pre>
+                </div>
+              )}
+            </div>
+            <div className="bg-slate-50 border-t border-slate-100 px-6 py-3 flex justify-between items-center text-[10px] font-black uppercase tracking-widest text-slate-400">
               <div>Page {currentPage + 1} of {totalPages}</div>
               <div className="flex items-center gap-4">
                 <button onClick={handlePreviousPage} disabled={currentPage === 0} className="hover:text-blue-600 disabled:opacity-30 disabled:pointer-events-none transition-colors">Previous</button>
@@ -515,6 +488,7 @@ export const AIConversionPreview: React.FC<AIConversionPreviewProps> = ({
             </div>
           </Card>
         </div>
+        )}
       </div>
 
       {/* Add Field Dialog */}
